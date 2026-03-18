@@ -1,0 +1,25 @@
+# Python relative
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+build/
+dist/
+
+# development
+.vscode/
+.idea/
+.env         
+
+# Data & Logs
+*.log
+data/        
+*.csv
+*.json
+*.sqlite    
+
+# OS
+.DS_Store
+Thumbs.db
