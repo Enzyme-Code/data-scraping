@@ -7,19 +7,45 @@ venv/
 ENV/
 build/
 dist/
+*.egg-info/
+.installed.cfg
+.eggs/
 
-# development
+# Testing & Quality
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.tox/
+# 排除你剛才寫的臨時測試腳本
+pg_test.py
+playground/
+
+# Development & Editors
 .vscode/
 .idea/
-.env         
+*.swp
+*.swo
+.env
 
 # Data & Logs
 *.log
-data/        
+logs/
+data/
+!data/.gitkeep 
 *.csv
 *.json
-*.sqlite    
+*.sqlite
+*.gz
+*.parquet   
 
-# OS
+# Jupyter Notebook
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# OS (Mac & Windows)
 .DS_Store
+.DS_Store?
+._*
 Thumbs.db
+desktop.ini
