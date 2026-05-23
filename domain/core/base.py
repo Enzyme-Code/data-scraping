@@ -36,7 +36,6 @@ class Base(ABC):
                 delay *= self.backoff_factor
         return None
 
-    @abstractmethod
     def _fetch(self) -> List[Dict[str, Any]]:
         """
         Fetch data as a list of dictionaries for JSONB compatibility.
