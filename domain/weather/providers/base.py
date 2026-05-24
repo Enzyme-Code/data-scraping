@@ -3,7 +3,7 @@ import requests
 from typing import List, Dict, Any, Tuple, Optional
 from domain.core import Handler
 
-class Base(Handler):
+class WeatherBase(Handler):
     def __init__(
         self, 
         api_key: str = None, 
