@@ -40,7 +40,7 @@ class WeatherBase(Handler):
         if location_name:
             params["locationName"] = location_name
             
-        response = requests.get(url, params=params, timeout=15, verify=False)
+        response = requests.get(url, params=params, timeout=15)
         response.raise_for_status()
         return [response.json()]
 
@@ -78,7 +78,7 @@ class WeatherBase(Handler):
             "end": end_date,
             "format": "JSON"
         }
-        response = requests.get(url, params=params, timeout=20, verify=False)
+        response = requests.get(url, params=params, timeout=20)
         response.raise_for_status()
         return [response.json()]
 
