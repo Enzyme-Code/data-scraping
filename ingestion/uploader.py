@@ -28,7 +28,6 @@ class Uploader(Base):
                 "en": en_name_val
             }, ensure_ascii=False)
 
-            # 更新 SQL 語句，加入 zh_name 與 en_name
             upsert_query = """
             INSERT INTO ticker.ticker_info (
                 ticker_code, zh_name, en_name, display_names, 
@@ -39,7 +38,14 @@ class Uploader(Base):
                 zh_name = EXCLUDED.zh_name,
                 en_name = EXCLUDED.en_name,
                 display_names = EXCLUDED.display_names,
+                owner = EXCLUDED.owner,
+                source = EXCLUDED.source,
+                category = EXCLUDED.category,
+                region = EXCLUDED.region,
+                frequency = EXCLUDED.frequency,
                 url = EXCLUDED.url,
+                note = EXCLUDED.note,
+                is_active = EXCLUDED.is_active,
                 updated_at = NOW();
             """
             params = (
@@ -56,4 +62,4 @@ class Uploader(Base):
 
 if __name__ == "__main__":
     with Uploader() as uploader:
-        uploader.file_upload("weather.xlsx")
+        uploader.file_upload("3day_1week_weather.xlsx")
