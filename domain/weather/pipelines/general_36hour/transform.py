@@ -14,6 +14,12 @@ cfg = PostgreConfig(
     database = os.getenv("DATABASE") 
 )
 
+def safe_int(val, default=0):
+    try:
+        return int(val)
+    except (ValueError, TypeError):
+        return default
+
 def transform():
     log.info("=== 36小時天氣預報：資料清洗轉換程序啟動 ===")
     try:
@@ -38,12 +44,9 @@ def transform():
             log.warning("原始表未撈到任何資料！放棄本次清洗，以保護正式表不被誤清空。")
             return
             
-        log.info(f"篩選成功！本次預計處理：{len(raw_records)} 筆縣市最新資料。")
+        log.info(f"篩選成功！本次預計處理：{len(raw_records)} 筆縣市原始資料。")
 
-        log.info("🧹 正在清空 process_data.weather_36h 以便寫入最新快照...")
-        db_connector.execute("TRUNCATE TABLE process_data.weather_36h;")
-
-        upsert_count = 0
+        insert_data_list = []
 
         for record in raw_records:
             ticker_info_id = record['ticker_info_id']
@@ -78,39 +81,60 @@ def transform():
                         
                         if elem_name == "Wx":
                             time_slots[slot_key]["wx_text"] = param.get("parameterName")
-                            time_slots[slot_key]["wx_code"] = int(param.get("parameterValue", 0))
+                            time_slots[slot_key]["wx_code"] = safe_int(param.get("parameterValue", 0))
                         elif elem_name == "PoP":
-                            time_slots[slot_key]["pop"] = int(param.get("parameterName", 0))
+                            time_slots[slot_key]["pop"] = safe_int(param.get("parameterName", 0))
                         elif elem_name == "MinT":
-                            time_slots[slot_key]["min_temp"] = int(param.get("parameterName", 0))
+                            time_slots[slot_key]["min_temp"] = safe_int(param.get("parameterName", 0))
                         elif elem_name == "MaxT":
-                            time_slots[slot_key]["max_temp"] = int(param.get("parameterName", 0))
+                            time_slots[slot_key]["max_temp"] = safe_int(param.get("parameterName", 0))
                         elif elem_name == "CI":
                             time_slots[slot_key]["ci_text"] = param.get("parameterName")
 
-                if time_slots:
-                    sorted_slots = sorted(time_slots.items(), key=lambda x: x[0][0])
-                    (start_time, end_time), data = sorted_slots[0]
+                for (start_time, end_time), data in time_slots.items():
+                    try:
+                        start_dt = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
+                        end_dt = datetime.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
+                    except Exception as parse_err:
+                        log.error(f"時間格式解析失敗 ({start_time} / {end_time}): {parse_err}")
+                        continue
 
-                    start_dt = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                    end_dt = datetime.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-
-                    upsert_sql = """
-                        INSERT INTO process_data.weather_36h (
-                            ticker_info_id, start_time, end_time, county_name, 
-                            wx_text, wx_code, pop, min_temp, max_temp, ci_text, created_at
-                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
-                    """
-                    
-                    db_connector.execute(upsert_sql, (
+                    insert_data_list.append((
                         ticker_info_id, start_dt, end_dt, county_name,
                         data.get("wx_text", "未知"), data.get("wx_code", 0), 
                         data.get("pop", 0), data.get("min_temp", 0), 
                         data.get("max_temp", 0), data.get("ci_text", "")
                     ))
-                    upsert_count += 1
 
-        log.info(f"=== 洗完收工！成功清空舊表並重新寫入 {upsert_count} 筆最新 36h 快照資料！ ===")
+        if insert_data_list:
+            log.info(f"啟動資料庫交易：準備寫入共 {len(insert_data_list)} 筆時段快照資料...")
+            
+            upsert_sql = """
+                INSERT INTO process_data.weather_36h (
+                    ticker_info_id, start_time, end_time, county_name, 
+                    wx_text, wx_code, pop, min_temp, max_temp, ci_text, created_at
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (ticker_info_id, start_time, end_time) 
+                DO UPDATE SET 
+                    county_name = EXCLUDED.county_name,
+                    wx_text = EXCLUDED.wx_text,
+                    wx_code = EXCLUDED.wx_code,
+                    pop = EXCLUDED.pop,
+                    min_temp = EXCLUDED.min_temp,
+                    max_temp = EXCLUDED.max_temp,
+                    ci_text = EXCLUDED.ci_text,
+                    created_at = CURRENT_TIMESTAMP;
+            """
+            
+            if hasattr(db_connector, 'executemany'):
+                db_connector.executemany(upsert_sql, insert_data_list)
+            else:
+                for row in insert_data_list:
+                    db_connector.execute(upsert_sql, row)
+                    
+            log.info(f"=== 洗完收工！成功無縫更新 {len(insert_data_list)} 筆最新 36h 時段資料！ ===")
+        else:
+            log.warning("沒有任何有效的資料轉換成功，取消寫入程序。")
 
     except Exception as e:
         log.error(f"資料清洗過程中發生異常崩潰: {e}", exc_info=True)
