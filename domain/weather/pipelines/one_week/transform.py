@@ -154,21 +154,50 @@ def transform():
                         ))
 
         if valid_records:
-            log.info("🧹 正在清空舊的未來 1 週鄉鎮快照表...")
-            db_connector.execute("TRUNCATE TABLE process_data.weather_1week;")
-            
-            log.info(f"正在批次寫入 {len(valid_records)} 筆最新 1 週趨勢鄉鎮數據...")
+            log.info(f"正在執行未來 1 週鄉鎮數據滾動覆蓋，總計：{len(valid_records)} 筆...")
             insert_sql = """
                 INSERT INTO process_data.weather_1week (
                     ticker_info_id, geocode, start_time, end_time, county_name, township_name, latitude, longitude,
                     avg_temp, avg_dew_point, max_temp, min_temp, max_apparent_temp, min_apparent_temp,
                     max_ci_code, max_ci_text, min_ci_code, min_ci_text, avg_rh, wind_dir, wind_speed,
                     beaufort, pop, uvi_code, uvi_text, wx_text, wx_code, weather_desc, created_at
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP);
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (ticker_info_id, geocode, start_time, end_time) 
+                DO UPDATE SET 
+                    county_name = EXCLUDED.county_name,
+                    township_name = EXCLUDED.township_name,
+                    latitude = EXCLUDED.latitude,
+                    longitude = EXCLUDED.longitude,
+                    avg_temp = EXCLUDED.avg_temp,
+                    avg_dew_point = EXCLUDED.avg_dew_point,
+                    max_temp = EXCLUDED.max_temp,
+                    min_temp = EXCLUDED.min_temp,
+                    max_apparent_temp = EXCLUDED.max_apparent_temp,
+                    min_apparent_temp = EXCLUDED.min_apparent_temp,
+                    max_ci_code = EXCLUDED.max_ci_code,
+                    max_ci_text = EXCLUDED.max_ci_text,
+                    min_ci_code = EXCLUDED.min_ci_code,
+                    min_ci_text = EXCLUDED.min_ci_text,
+                    avg_rh = EXCLUDED.avg_rh,
+                    wind_dir = EXCLUDED.wind_dir,
+                    wind_speed = EXCLUDED.wind_speed,
+                    beaufort = EXCLUDED.beaufort,
+                    pop = EXCLUDED.pop,
+                    uvi_code = EXCLUDED.uvi_code,
+                    uvi_text = EXCLUDED.uvi_text,
+                    wx_text = EXCLUDED.wx_text,
+                    wx_code = EXCLUDED.wx_code,
+                    weather_desc = EXCLUDED.weather_desc,
+                    created_at = CURRENT_TIMESTAMP;
             """
-            for row in valid_records:
-                db_connector.execute(insert_sql, row)
-            log.info(f"=== 未来 1 週鄉鎮預報轉換完畢！成功寫入 {len(valid_records)} 筆快照。 ===")
+            if hasattr(db_connector, 'executemany'):
+                db_connector.executemany(insert_sql, valid_records)
+            else:
+                for row in valid_records:
+                    db_connector.execute(insert_sql, row)
+            log.info(f"=== 未来 1 週鄉鎮預報轉換完畢！成功覆蓋更新 {len(valid_records)} 筆資料。 ===")
+        else:
+            log.warning("沒有任何有效的資料轉換成功，取消寫入程序。")
 
     except Exception as e:
         log.error(f"1 週預報清洗程序異常崩潰: {e}", exc_info=True)
