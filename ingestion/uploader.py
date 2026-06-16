@@ -14,15 +14,14 @@ class Uploader(Base):
 
         print(f"[INFO] Syncing configuration from: {excel_path}")
         df = pd.read_excel(excel_path)
+        
         for _, row in df.iterrows():
             ticker_val = row['ticker']
             category_val = row['category']
             zh_name_val = row['name_zh']  # 取得中文名
             en_name_val = row['name_en']  # 取得英文名
 
-            self._ensure_raw_table_exists(category_val)
-
-            # 同時保留 JSONB 格式給未來擴充
+            # 保留 JSONB 格式給未來前端或擴充彈性使用
             display_names = json.dumps({
                 "zh_tw": zh_name_val,
                 "en": en_name_val
@@ -63,3 +62,9 @@ class Uploader(Base):
 if __name__ == "__main__":
     with Uploader() as uploader:
         uploader.file_upload("3day_1week_weather.xlsx")
+
+
+        
+"""
+將檔案放進 ingestion 底下後，直接將檔案名稱放在 uploader.file_upload() 裡面以字串格式表示
+"""
