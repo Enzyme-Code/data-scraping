@@ -6,10 +6,10 @@ on:
       - main  # 當你 push 到 main 分支時，會自動觸發打包與部署
 
 env:
-  PROJECT_ID: data-scraping-499714  # ⚠️【唯一需要修改的地方】
-  REGION: asia-east1            # 台灣機房
-  REPO_NAME: data-scraping       # 剛才你在 GCP 建立的倉庫名稱
-  JOB_NAME: weather-crawler-job # 預計在 Cloud Run 自動建立的任務名稱
+  PROJECT_ID: data-scraping-499714  # GCP 專案 ID
+  REGION: asia-east1               # 台灣機房
+  REPO_NAME: crawler-repo          # 真實倉庫名稱
+  JOB_NAME: weather-crawler-job    # 讓 Cloud Run 自動建立的 Job 名稱
 
 jobs:
   deploy:
