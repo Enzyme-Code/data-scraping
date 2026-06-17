@@ -1,0 +1,48 @@
+name: Build and Deploy to Cloud Run Job
+
+on:
+  push:
+    branches:
+      - main  # 當你 push 到 main 分支時，會自動觸發打包與部署
+
+env:
+  PROJECT_ID: data-scraping-499714  # ⚠️【唯一需要修改的地方】
+  REGION: asia-east1            # 台灣機房
+  REPO_NAME: data-scraping       # 剛才你在 GCP 建立的倉庫名稱
+  JOB_NAME: weather-crawler-job # 預計在 Cloud Run 自動建立的任務名稱
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    # 1. 認證 GCP 金鑰 (讀取你在 GitHub Secrets 存的 GCP_SA_KEY)
+    - name: Authenticate to Google Cloud
+      uses: google-github-actions/auth@v2
+      with:
+        credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+    # 2. 設定 Docker 憑證，讓 GitHub 能夠安全連線到台灣的 GCP 倉庫
+    - name: Configure Docker for GCP
+      run: |
+        gcloud auth configure-docker asia-east1-docker.pkg.dev --quiet
+
+    # 3. 在 GitHub 雲端伺服器自動打包 Docker 並推送到 GCP Artifact Registry
+    - name: Build and Push Docker Image
+      run: |
+        TAG=asia-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.JOB_NAME }}:${{ github.sha }}
+        docker build -t $TAG .
+        docker push $TAG
+        echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
+
+    # 4. 自動在 GCP Cloud Run 建立或更新這個 Job，並把 Neon 的連線字串塞進環境變數
+    - name: Deploy to Cloud Run Job
+      run: |
+        gcloud beta run jobs deploy ${{ env.JOB_NAME }} \
+          --image ${{ env.IMAGE_TAG }} \
+          --region ${{ env.REGION }} \
+          --set-env-vars DATABASE_URL="${{ secrets.DATABASE_URL }}" \
+          --max-retries 0 \
+          --quiet
