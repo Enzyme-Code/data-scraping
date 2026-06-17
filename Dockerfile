@@ -1,5 +1,5 @@
 # 採用官方輕量版 Python 環境（Debian 系統）
-FROM python:3.10-slim
+FROM python:3.12-slim
 
 # 設定容器內的工作目錄為 /app
 WORKDIR /app
