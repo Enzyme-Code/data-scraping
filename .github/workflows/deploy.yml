@@ -37,12 +37,12 @@ jobs:
         docker push $TAG
         echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
-# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，兩端變數名稱完美對齊
+# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，加上強制的 SSL 加密連線
     - name: Deploy to Cloud Run Job
       run: |
         gcloud beta run jobs deploy ${{ env.JOB_NAME }} \
           --image ${{ env.IMAGE_TAG }} \
           --region ${{ env.REGION }} \
-          --set-env-vars PG_HOST="${{ secrets.PG_HOST }}",PG_PORT="5432",PG_USER="${{ secrets.PG_USER }}",PG_PASSWORD="${{ secrets.PG_PASSWORD }}",DATABASE="${{ secrets.PG_DATABASE }}",WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
+          --set-env-vars PG_HOST="${{ secrets.PG_HOST }}",PG_PORT="5432",PG_USER="${{ secrets.PG_USER }}",PG_PASSWORD="${{ secrets.PG_PASSWORD }}",DATABASE="${{ secrets.PG_DATABASE }}",WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}",PGSSLMODE="require" \
           --max-retries 0 \
           --quiet
