@@ -23,15 +23,15 @@ def purge_expired_data():
         return
 
     try:
-        purge_36h = "DELETE FROM process_data.weather_36h WHERE end_time < NOW();"
+        purge_36h = "DELETE FROM data.weather_36h WHERE end_time < NOW();"
         db_connector.execute(purge_36h)
         log.info("[1/3] weather_36h 過期歷史時段切除完畢。")
 
-        purge_3day = "DELETE FROM process_data.weather_3day WHERE data_time < NOW();"
+        purge_3day = "DELETE FROM data.weather_3day WHERE data_time < NOW();"
         db_connector.execute(purge_3day)
         log.info("[2/3] weather_3day 過期歷史觀測點切除完畢。")
 
-        purge_1week = "DELETE FROM process_data.weather_1week WHERE end_time < NOW();"
+        purge_1week = "DELETE FROM data.weather_1week WHERE end_time < NOW();"
         db_connector.execute(purge_1week)
         log.info("[3/3] weather_1week 過期歷史長週期區間切除完畢。")
 
