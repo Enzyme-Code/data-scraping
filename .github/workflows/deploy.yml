@@ -37,17 +37,12 @@ jobs:
         docker push $TAG
         echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
-    # 4. 自動在 GCP Cloud Run 建立或更新這個 Job，並把 Neon 的連線字串塞進環境變數
+# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，把拆散的連線資訊塞進環境變數
     - name: Deploy to Cloud Run Job
       run: |
         gcloud beta run jobs deploy ${{ env.JOB_NAME }} \
           --image ${{ env.IMAGE_TAG }} \
           --region ${{ env.REGION }} \
-          --set-env-vars \
-            DB_HOST="${{ secrets.DB_HOST }}",\
-            DB_PORT="${{ secrets.DB_PORT }}",\
-            DB_USER="${{ secrets.DB_USER }}",\
-            DB_PASSWORD="${{ secrets.DB_PASSWORD }}",\
-            DB_DATABASE="${{ secrets.DB_DATABASE }}" \
+          --set-env-vars DB_HOST="${{ secrets.DB_HOST }}",DB_PORT="${{ secrets.DB_PORT }}",DB_USER="${{ secrets.DB_USER }}",DB_PASSWORD="${{ secrets.DB_PASSWORD }}",DB_DATABASE="${{ secrets.DB_DATABASE }}" \
           --max-retries 0 \
           --quiet
