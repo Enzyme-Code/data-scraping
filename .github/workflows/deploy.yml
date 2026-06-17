@@ -37,12 +37,12 @@ jobs:
         docker push $TAG
         echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
-# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，精準對齊你的 Python 變數名稱
+# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，順便把氣象 API Key 注入進去
     - name: Deploy to Cloud Run Job
       run: |
         gcloud beta run jobs deploy ${{ env.JOB_NAME }} \
           --image ${{ env.IMAGE_TAG }} \
           --region ${{ env.REGION }} \
-          --set-env-vars PG_HOST="${{ secrets.DB_HOST }}",PG_PORT="${{ secrets.DB_PORT }}",PG_USER="${{ secrets.DB_USER }}",PG_PASSWORD="${{ secrets.DB_PASSWORD }}",DATABASE="${{ secrets.DB_DATABASE }}" \
+          --set-env-vars PG_HOST="${{ secrets.DB_HOST }}",PG_PORT="${{ secrets.DB_PORT }}",PG_USER="${{ secrets.DB_USER }}",PG_PASSWORD="${{ secrets.DB_PASSWORD }}",DATABASE="${{ secrets.DB_DATABASE }}",WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}" \
           --max-retries 0 \
           --quiet
