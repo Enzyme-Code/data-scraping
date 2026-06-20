@@ -14,7 +14,7 @@ cfg = PostgreConfig(
 )
 
 def purge_expired_data():
-    log.info("=== ♻️ 啟動全自動化過期天氣預報數據清理任務 ===")
+    log.info("=== 啟動全自動化過期天氣預報數據清理任務 ===")
     try:
         db_connector = DatabaseFactory.get_connector(cfg)
         db_connector.connect()
@@ -23,17 +23,17 @@ def purge_expired_data():
         return
 
     try:
-        purge_36h = "DELETE FROM data.weather_36h WHERE end_time < NOW();"
+        purge_36h = "DELETE FROM data.weather_36h WHERE end_time < (NOW() AT TIME ZONE 'Asia/Taipei' - INTERVAL '1 hour');"
         db_connector.execute(purge_36h)
-        log.info("[1/3] weather_36h 過期歷史時段切除完畢。")
+        log.info("[1/3] weather_36h 過期歷史時段切除完畢 (含 1 小時寬限期)。")
 
-        purge_3day = "DELETE FROM data.weather_3day WHERE data_time < NOW();"
+        purge_3day = "DELETE FROM data.weather_3day WHERE data_time < (NOW() AT TIME ZONE 'Asia/Taipei' - INTERVAL '1 hour');"
         db_connector.execute(purge_3day)
-        log.info("[2/3] weather_3day 過期歷史觀測點切除完畢。")
+        log.info("[2/3] weather_3day 過期歷史觀測點切除完畢 (含 1 小時寬限期)。")
 
-        purge_1week = "DELETE FROM data.weather_1week WHERE end_time < NOW();"
+        purge_1week = "DELETE FROM data.weather_1week WHERE end_time < (NOW() AT TIME ZONE 'Asia/Taipei' - INTERVAL '1 hour');"
         db_connector.execute(purge_1week)
-        log.info("[3/3] weather_1week 過期歷史長週期區間切除完畢。")
+        log.info("[3/3] weather_1week 過期歷史長週期區間切除完畢 (含 1 小時寬限期)。")
 
         log.info("=== 清理完畢 ===")
 
