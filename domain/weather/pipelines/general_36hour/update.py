@@ -58,7 +58,6 @@ def update():
     log.info("=== 36小時天氣預報：同步與清洗排程開始 ===")
     client = WeatherClient(api_key=os.getenv("WEATHER_API_KEY"))
     
-    # 1. 請求中央氣象署原始數據
     try:
         log.info("正在向中央氣象署請求 F-C0032-001 原始資料...")
         raw_response = client.get_rest_data(data_id="F-C0032-001")
@@ -67,25 +66,22 @@ def update():
         log.error(f"氣象署 API 連線失敗或 DNS 無法解析！錯誤訊息: {e}", exc_info=True)
         return
 
-    # 2. 檢查 API 結構完整性
     try:
         locations = raw_response[0]['records']['location']
     except (KeyError, IndexError) as e:
         log.error(f"API 資料結構解析失敗（官方可能修改了外層欄位）: {e}")
         return
 
-    # 3. 初始化與開啟資料庫連線
+
     db_connector = DatabaseFactory.get_connector(cfg)
     db_connector.connect()
     
     try:
-        ticker_cache = {}    # 儲存本次執行期間的 Ticker ID 區域快取
+        ticker_cache = {}   
         insert_data_list = []
-        
-        # 欄位映射字典，用於加速且簡化多重條件判斷
+    
         elem_fields = {"PoP": "pop", "MinT": "min_temp", "MaxT": "max_temp"}
 
-        # 4. 在 Python 記憶體中直接進行高階資料搓揉與型態清洗
         for loc_data in locations:
             city_name = loc_data.get("locationName")
             ticker_code = CITY_TO_TICKER.get(city_name)
@@ -118,7 +114,6 @@ def update():
                     elif elem_name in elem_fields:
                         time_slots[slot_key][elem_fields[elem_name]] = safe_int(p_name, 0)
 
-            # 格式化時間，轉換為乾淨 Tuple 打包進批次清單
             for (start_time, end_time), data in time_slots.items():
                 try:
                     start_dt = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
@@ -133,8 +128,7 @@ def update():
                     data.get("pop", 0), data.get("min_temp", 0), 
                     data.get("max_temp", 0), data.get("ci_text", "")
                 ))
-
-        # 5. 執行高效批次 Upsert 寫入資料庫的新 data schema 表
+                
         if not insert_data_list:
             log.warning("本次轉換無任何有效數據，取消寫入程序。")
             return
@@ -170,7 +164,6 @@ def update():
             log.error(f"寫入 data.weather_36h 正式表時發生資料庫異常: {db_err}", exc_info=True)
 
     finally:
-        # 核心防禦：確保不論上述程序成功與否，最終必定釋放資料庫連線，杜絕 DB 卡死崩潰
         if hasattr(db_connector, 'close'):
             db_connector.close()
             log.info("[INFO] 資料庫連線池通道已安全回收關閉。")
