@@ -3,13 +3,13 @@ name: Build and Deploy to Cloud Run Job
 on:
   push:
     branches:
-      - main  # 當你 push 到 main 分支時，會自動觸發打包與部署
+      - main  
 
 env:
-  PROJECT_ID: data-scraping-499714  # GCP 專案 ID
-  REGION: asia-east1               # 台灣機房
-  REPO_NAME: crawler-repo          # 真實倉庫名稱
-  JOB_NAME: weather-crawler-job    # 讓 Cloud Run 自動建立的 Job 名稱
+  PROJECT_ID: data-scraping-499714 
+  REGION: asia-east1               
+  REPO_NAME: crawler-repo         
+  JOB_NAME: weather-crawler-job    
 
 jobs:
   deploy:
@@ -18,18 +18,15 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    # 1. 認證 GCP 金鑰 (讀取你在 GitHub Secrets 存的 GCP_SA_KEY)
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v2
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    # 2. 設定 Docker 憑證，讓 GitHub 能夠安全連線到台灣的 GCP 倉庫
     - name: Configure Docker for GCP
       run: |
         gcloud auth configure-docker asia-east1-docker.pkg.dev --quiet
 
-    # 3. 在 GitHub 雲端伺服器自動打包 Docker 並推送到 GCP Artifact Registry
     - name: Build and Push Docker Image
       run: |
         TAG=asia-east1-docker.pkg.dev/${{ env.PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.JOB_NAME }}:${{ github.sha }}
@@ -37,12 +34,10 @@ jobs:
         docker push $TAG
         echo "IMAGE_TAG=$TAG" >> $GITHUB_ENV
 
-# 4. 自動在 GCP Cloud Run 建立或更新這個 Job，加上強制的 SSL 加密連線
     - name: Deploy to Cloud Run Job
       run: |
         gcloud beta run jobs deploy ${{ env.JOB_NAME }} \
           --image ${{ env.IMAGE_TAG }} \
           --region ${{ env.REGION }} \
-          --set-env-vars PG_HOST="${{ secrets.PG_HOST }}",PG_PORT="5432",PG_USER="${{ secrets.PG_USER }}",PG_PASSWORD="${{ secrets.PG_PASSWORD }}",DATABASE="${{ secrets.PG_DATABASE }}",WEATHER_API_KEY="${{ secrets.WEATHER_API_KEY }}",PGSSLMODE="require" \
           --max-retries 0 \
           --quiet

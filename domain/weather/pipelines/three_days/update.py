@@ -10,7 +10,7 @@ from utils.logger import set_log
 load_dotenv()
 log = set_log(project_name="weather/sync_3day")
 
-# 配置轉換防禦
+
 cfg = PostgreConfig(
     host=os.getenv("PG_HOST"),
     port=int(os.getenv("PG_PORT", 5432)),
@@ -49,7 +49,6 @@ def update():
     log.info(f"=== 未來三天鄉鎮預報排程開始 (預計輪詢 {len(TICKER_MAP_3DAY)} 個 CWA 接口) ===")
     client = WeatherClient(api_key=os.getenv("WEATHER_API_KEY"))
 
-    # 1. 初始化資料庫連線
     try:
         db_connector = DatabaseFactory.get_connector(cfg)
         db_connector.connect()
@@ -58,7 +57,6 @@ def update():
         return
 
     try:
-        # 2. 預先預載 Ticker ID 對照表，徹底優化效能
         ticker_rows = db_connector.execute("SELECT id, ticker_code FROM ticker.ticker_info;")
         code_to_id = {
             (row['ticker_code'] if isinstance(row, dict) else row[1]): 
@@ -68,7 +66,6 @@ def update():
 
         valid_records = []
         
-        # 3. 展開 API 輪詢大迴圈
         for ticker_code, data_id in TICKER_MAP_3DAY.items():
             ticker_info_id = code_to_id.get(ticker_code)
             if not ticker_info_id:
@@ -90,7 +87,6 @@ def update():
                 county_name = dataset.get("LocationsName") or dataset.get("locationsName", "未知縣市")
                 location_array = dataset.get('Location') or dataset.get('location', [])
 
-                # 4. 鄉鎮級資料清洗
                 for loc in location_array:
                     township_name = loc.get("LocationName") or loc.get("locationName")
                     geocode = loc.get("Geocode") or loc.get("geocode")
@@ -115,7 +111,6 @@ def update():
                             if not values: continue
                             v0 = values[0]
                             
-                            # 簡潔高精確度欄位比對機制
                             if elem_name == "溫度":
                                 time_slots[d_time]["temp"] = safe_int(v0.get("Temperature"))
                             elif elem_name == "露點溫度":
@@ -140,7 +135,6 @@ def update():
                             elif elem_name == "天氣預報綜合描述":
                                 time_slots[d_time]["weather_desc"] = v0.get("WeatherDescription", "")
 
-                    # 打包成標準 Tuple 元組放入記憶體批次清單
                     for d_time, data in time_slots.items():
                         parsed_dt = parse_time(d_time)
                         if not parsed_dt: continue
@@ -158,7 +152,6 @@ def update():
                 log.error(f"[接口失敗] Ticker: {ticker_code} 請求或解析時發生異常: {api_err}", exc_info=True)
                 continue
 
-        # 5. 批次 Upsert 入庫 (data.weather_3day)
         if not valid_records:
             log.warning("本次全台輪詢未轉換出任何有效數據，終止寫入。")
             return
@@ -203,7 +196,6 @@ def update():
             log.error(f"批次寫入 data.weather_3day 時發生資料庫阻斷異常: {db_err}", exc_info=True)
 
     finally:
-        # 6. 強制善後保護
         if hasattr(db_connector, 'close'):
             db_connector.close()
             log.info("[INFO] 資料庫連線池通道已安全回收關閉。")
