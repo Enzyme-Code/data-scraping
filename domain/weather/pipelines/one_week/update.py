@@ -7,7 +7,7 @@ from domain.weather.providers.client import WeatherClient
 from utils.logger import set_log
 
 load_dotenv()
-log = set_log(project_name="weather/sync_1week")
+log = set_log(project_name="weather/forecast_1week")
 
 cfg = PostgreConfig(
     host=os.getenv("PG_HOST"),
@@ -57,6 +57,13 @@ def update():
             for row in ticker_rows
         }
 
+        elem_rows = db_connector.execute("SELECT id, element_name FROM weather.element_type;")
+        name_to_elem_id = {
+            (row['element_name'] if isinstance(row, dict) else row[1]): 
+            (row['id'] if isinstance(row, dict) else row[0]) 
+            for row in elem_rows
+        }
+
         valid_records = []
 
         for ticker_code, data_id in TICKER_MAP_1WEEK.items():
@@ -77,9 +84,12 @@ def update():
                     for element in loc.get('WeatherElement', []):
                         elem_name = element.get("ElementName") or element.get("elementName")
                         
-                        # 過濾掉不需要存的綜合描述與舒適度長文字
-                        if elem_name in ("天氣預報綜合描述", "ComfortIndexDescription", "最大舒適度指數描述", "最小舒適度指數描述"):
+                        # 過濾不需要的綜合描述與代碼
+                        if elem_name in ("天氣預報綜合描述", "ComfortIndexDescription", "最大舒適度指數描述", "最小舒適度指數描述", "WeatherCode", "天氣現象代碼"):
                             continue
+
+                        element_type_id = name_to_elem_id.get(elem_name)
+                        if not element_type_id: continue
 
                         for t_block in element.get('Time', []):
                             st_str = t_block.get("StartTime") or t_block.get("startTime")
@@ -96,7 +106,7 @@ def update():
                             actual_value = next(iter(val_dict.values())) if isinstance(val_dict, dict) else str(val_dict)
 
                             valid_records.append((
-                                ticker_id, location_info_id, parsed_st, parsed_et, elem_name, str(actual_value)
+                                ticker_id, location_info_id, parsed_st, parsed_et, element_type_id, str(actual_value)
                             ))
 
             except Exception as api_err:
@@ -106,19 +116,24 @@ def update():
         if valid_records:
             upsert_sql = """
                 INSERT INTO weather.forecast_one_week (
-                    ticker_id, location_info_id, start_time, end_time, element_name, element_value
+                    ticker_id, location_info_id, start_time, end_time, element_type_id, element_value
                 ) VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_name) 
+                ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_type_id) 
                 DO UPDATE SET 
                     element_value = EXCLUDED.element_value,
                     updated_at = NOW();
             """
-            if hasattr(db_connector, 'executemany'):
-                db_connector.executemany(upsert_sql, valid_records)
-            else:
-                for row in valid_records: 
-                    db_connector.execute(upsert_sql, row)
-            log.info(f"成功滾動同步 {len(valid_records)} 筆一週走勢垂直因子數據")
+            
+            batch_size = 1000
+            for i in range(0, len(valid_records), batch_size):
+                chunk = valid_records[i:i + batch_size]
+                if hasattr(db_connector, 'executemany'):
+                    db_connector.executemany(upsert_sql, chunk)
+                else:
+                    for row in chunk: 
+                        db_connector.execute(upsert_sql, row)
+                        
+            log.info(f"成功滾動同步 {len(valid_records)} 筆一週走勢垂直因子數據 (已完成 INT 效能優化分批打包)")
 
     finally:
         db_connector.close()
