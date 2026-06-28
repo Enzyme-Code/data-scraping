@@ -1,6 +1,5 @@
 import datetime
 import os
-import json
 from dotenv import load_dotenv
 
 from storage import DatabaseFactory, PostgreConfig
@@ -8,7 +7,7 @@ from domain.weather.providers.client import WeatherClient
 from utils.logger import set_log
 
 load_dotenv()
-log = set_log(project_name="weather/sync_36h")
+log = set_log(project_name="weather/forecast_36h")
 
 cfg = PostgreConfig(
     host=os.getenv("PG_HOST"),
@@ -32,74 +31,49 @@ CITY_TO_TICKER = {
     "彰化縣": "sys.wea.cwa.ch.36h", "連江縣": "sys.wea.cwa.mz.36h"
 }
 
-def safe_int(val, default=0):
-    """安全轉換型態為 int 的防禦函式"""
-    try:
-        return int(val)
-    except (ValueError, TypeError):
-        return default
-
-def _resolve_ticker_id(db_conn, ticker_code: str, cache: dict) -> int:
-    """反查 ticker_info 內的主鍵 ID（帶有記憶體快取）"""
-    if ticker_code in cache:
-        return cache[ticker_code]
-    
-    query = "SELECT id FROM ticker.ticker_info WHERE ticker_code = %s;"
-    results = db_conn.execute(query, (ticker_code,))
-    if results and len(results) > 0:
-        result = results[0]
-        t_id = result['id'] if isinstance(result, dict) else result[0]
-        cache[ticker_code] = t_id
-        return t_id
-    return None
+def safe_int(val):
+    try: return int(val)
+    except (ValueError, TypeError): return None
 
 def update():
-    """36小時天氣預報：抓取 -> 清洗 -> 批次 Upsert 一體化核心邏輯"""
-    log.info("=== 36小時天氣預報：同步與清洗排程開始 ===")
+    log.info("開始執行36小時天氣預報同步排程")
     client = WeatherClient(api_key=os.getenv("WEATHER_API_KEY"))
     
     try:
-        log.info("正在向中央氣象署請求 F-C0032-001 原始資料...")
         raw_response = client.get_rest_data(data_id="F-C0032-001")
-        log.info("成功取得氣象署原始回傳資料。")
-    except Exception as e:
-        log.error(f"氣象署 API 連線失敗或 DNS 無法解析！錯誤訊息: {e}", exc_info=True)
-        return
-
-    try:
         locations = raw_response[0]['records']['location']
-    except (KeyError, IndexError) as e:
-        log.error(f"API 資料結構解析失敗（官方可能修改了外層欄位）: {e}")
+    except Exception as e:
+        log.error(f"氣象署 API 請求或解析失敗: {e}", exc_info=True)
         return
-
 
     db_connector = DatabaseFactory.get_connector(cfg)
     db_connector.connect()
     
     try:
-        ticker_cache = {}   
-        insert_data_list = []
-    
-        elem_fields = {"PoP": "pop", "MinT": "min_temp", "MaxT": "max_temp"}
+        ticker_rows = db_connector.execute("SELECT id, ticker_code FROM ticker.ticker_info;")
+        code_to_id = {
+            (row['ticker_code'] if isinstance(row, dict) else row[1]): 
+            (row['id'] if isinstance(row, dict) else row[0]) 
+            for row in ticker_rows
+        }
+        
+        valid_records = []
 
         for loc_data in locations:
             city_name = loc_data.get("locationName")
             ticker_code = CITY_TO_TICKER.get(city_name)
-            
-            if not ticker_code:
-                continue
-                
-            ticker_id = _resolve_ticker_id(db_connector, ticker_code, ticker_cache)
-            if not ticker_id:
-                log.warning(f"找不到對應的 Ticker ID，請確認 Excel 是否已同步：{ticker_code} ({city_name})")
-                continue
+            ticker_id = code_to_id.get(ticker_code)
+            if not ticker_id: continue
 
             time_slots = {}
             for element in loc_data.get("weatherElement", []):
                 elem_name = element.get("elementName") 
-                
                 for t_block in element.get("time", []):
-                    slot_key = (t_block.get("startTime"), t_block.get("endTime"))
+                    st = t_block.get("startTime")
+                    et = t_block.get("endTime")
+                    if not st: continue
+
+                    slot_key = (st, et)
                     if slot_key not in time_slots:
                         time_slots[slot_key] = {}
                     
@@ -108,65 +82,52 @@ def update():
                     
                     if elem_name == "Wx":
                         time_slots[slot_key]["wx_text"] = p_name
-                        time_slots[slot_key]["wx_code"] = safe_int(param.get("parameterValue", 0))
                     elif elem_name == "CI":
                         time_slots[slot_key]["ci_text"] = p_name
-                    elif elem_name in elem_fields:
-                        time_slots[slot_key][elem_fields[elem_name]] = safe_int(p_name, 0)
+                    elif elem_name == "PoP":
+                        time_slots[slot_key]["pop"] = safe_int(p_name)
+                    elif elem_name == "MinT":
+                        time_slots[slot_key]["min_temp"] = safe_int(p_name)
+                    elif elem_name == "MaxT":
+                        time_slots[slot_key]["max_temp"] = safe_int(p_name)
 
-            for (start_time, end_time), data in time_slots.items():
-                try:
-                    start_dt = datetime.datetime.strptime(start_time, "%Y-%m-%d %H:%M:%S")
-                    end_dt = datetime.datetime.strptime(end_time, "%Y-%m-%d %H:%M:%S")
-                except Exception as parse_err:
-                    log.error(f"城市 {city_name} 時間格式轉換失敗 ({start_time} / {end_time}): {parse_err}")
-                    continue
-
-                insert_data_list.append((
-                    ticker_id, start_dt, end_dt, city_name,
-                    data.get("wx_text", "未知"), data.get("wx_code", 0), 
-                    data.get("pop", 0), data.get("min_temp", 0), 
-                    data.get("max_temp", 0), data.get("ci_text", "")
-                ))
+            for (st_str, et_str), data in time_slots.items():
+                parsed_st = datetime.datetime.strptime(st_str.replace("T", " ").split("+")[0].strip(), "%Y-%m-%d %H:%M:%S")
+                parsed_et = datetime.datetime.strptime(et_str.replace("T", " ").split("+")[0].strip(), "%Y-%m-%d %H:%M:%S")
                 
-        if not insert_data_list:
-            log.warning("本次轉換無任何有效數據，取消寫入程序。")
-            return
+                desc = f"{data.get('wx_text', '未知天氣')}。降雨機率 {data.get('pop', 0)}%。溫度攝氏 {data.get('min_temp', 0)} 至 {data.get('max_temp', 0)} 度。體感{data.get('ci_text', '舒適')}。"
 
-        try:
-            log.info(f"準備批次寫入：正在同步共 {len(insert_data_list)} 筆時段快照至 data.weather_36h 表...")
-            
+                valid_records.append((
+                    ticker_id, city_name, parsed_st, parsed_et,
+                    data.get("wx_text"), data.get("pop"), data.get("min_temp"), 
+                    data.get("max_temp"), data.get("ci_text"), desc
+                ))
+
+        if valid_records:
             upsert_sql = """
-                INSERT INTO data.weather_36h (
-                    ticker_info_id, start_time, end_time, county_name, 
-                    wx_text, wx_code, pop, min_temp, max_temp, ci_text
+                INSERT INTO weather.forecast_36hour (
+                    ticker_id, county_name, start_time, end_time, wx_text, pop, min_temp, max_temp, ci_text, weather_description
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker_info_id, start_time, end_time) 
+                ON CONFLICT (ticker_id, county_name, start_time) 
                 DO UPDATE SET 
-                    county_name = EXCLUDED.county_name,
+                    end_time = EXCLUDED.end_time,
                     wx_text = EXCLUDED.wx_text,
-                    wx_code = EXCLUDED.wx_code,
                     pop = EXCLUDED.pop,
                     min_temp = EXCLUDED.min_temp,
                     max_temp = EXCLUDED.max_temp,
                     ci_text = EXCLUDED.ci_text,
+                    weather_description = EXCLUDED.weather_description,
                     updated_at = NOW();
             """
-            
             if hasattr(db_connector, 'executemany'):
-                db_connector.executemany(upsert_sql, insert_data_list)
+                db_connector.executemany(upsert_sql, valid_records)
             else:
-                for row in insert_data_list:
+                for row in valid_records: 
                     db_connector.execute(upsert_sql, row)
-                    
-            log.info(f"=== 同步完成！已成功覆蓋更新 {len(insert_data_list)} 筆最新 data.weather_36h 資料 ===")
-        except Exception as db_err:
-            log.error(f"寫入 data.weather_36h 正式表時發生資料庫異常: {db_err}", exc_info=True)
+            log.info(f"成功同步 {len(valid_records)} 筆36小時縣市預報資料")
 
     finally:
-        if hasattr(db_connector, 'close'):
-            db_connector.close()
-            log.info("[INFO] 資料庫連線池通道已安全回收關閉。")
+        db_connector.close()
 
 if __name__ == "__main__":
     update()
