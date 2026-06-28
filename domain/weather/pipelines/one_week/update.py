@@ -48,16 +48,6 @@ TICKER_MAP_1WEEK = {
 }
 
 
-SKIP_ELEMENT_NAMES = {
-    "天氣預報綜合描述",
-    "ComfortIndexDescription",
-    "最大舒適度指數描述",
-    "最小舒適度指數描述",
-    "WeatherCode",
-    "天氣現象代碼",
-}
-
-
 UPSERT_FORECAST_ONE_WEEK_SQL = """
     INSERT INTO weather.forecast_one_week (
         ticker_id,
@@ -207,27 +197,6 @@ def fetch_and_normalize_records(
     code_to_id: dict,
     name_to_elem_id: dict,
 ) -> list[tuple[int, int, datetime.datetime, datetime.datetime, int, str]]:
-    """
-    回傳格式：
-    (
-        ticker_id,
-        location_info_id,
-        start_time,
-        end_time,
-        element_type_id,
-        element_value,
-    )
-
-    使用 record_map 去重。
-    去重 key 對應 DB unique key：
-    (
-        ticker_id,
-        location_info_id,
-        start_time,
-        end_time,
-        element_type_id,
-    )
-    """
     record_map: dict[tuple[int, int, datetime.datetime, datetime.datetime, int], str] = {}
 
     total_parsed_count = 0
@@ -260,6 +229,10 @@ def fetch_and_normalize_records(
 
                 if not location_info_id:
                     ticker_skipped_count += 1
+                    log.warning(
+                        f"location_info 找不到: "
+                        f"ticker_code={ticker_code}, data_id={data_id}, geocode={geocode}"
+                    )
                     continue
 
                 for element in get_weather_elements(loc):
@@ -269,14 +242,15 @@ def fetch_and_normalize_records(
                         ticker_skipped_count += 1
                         continue
 
-                    if elem_name in SKIP_ELEMENT_NAMES:
-                        ticker_skipped_count += 1
-                        continue
-
                     element_type_id = name_to_elem_id.get(elem_name)
 
                     if not element_type_id:
                         ticker_skipped_count += 1
+                        log.warning(
+                            f"element_type 找不到: "
+                            f"ticker_code={ticker_code}, data_id={data_id}, "
+                            f"geocode={geocode}, elem_name={elem_name}"
+                        )
                         continue
 
                     for t_block in get_time_blocks(element):
@@ -288,6 +262,12 @@ def fetch_and_normalize_records(
 
                         if not parsed_st or not parsed_et:
                             ticker_skipped_count += 1
+                            log.warning(
+                                f"1週預報時間解析失敗: "
+                                f"ticker_code={ticker_code}, data_id={data_id}, "
+                                f"geocode={geocode}, elem_name={elem_name}, "
+                                f"raw_time_block={t_block}"
+                            )
                             continue
 
                         actual_value = get_element_value(t_block)

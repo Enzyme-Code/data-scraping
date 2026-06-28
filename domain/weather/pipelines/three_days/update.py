@@ -48,15 +48,6 @@ TICKER_MAP_3DAY = {
 }
 
 
-SKIP_ELEMENT_NAMES = {
-    "天氣預報綜合描述",
-    "ComfortIndexDescription",
-    "舒適度指數描述",
-    "WeatherCode",
-    "天氣現象代碼",
-}
-
-
 UPSERT_FORECAST_THREE_DAYS_SQL = """
     INSERT INTO weather.forecast_three_days (
         ticker_id,
@@ -96,13 +87,9 @@ def get_records_node(raw_response: Any) -> dict:
         return {}
 
     if isinstance(raw_response, list):
-        if not raw_response:
-            return {}
-
-        first_item = raw_response[0]
+        first_item = raw_response[0] if raw_response else {}
         if isinstance(first_item, dict):
             return first_item.get("records", {}) or {}
-
         return {}
 
     if isinstance(raw_response, dict):
@@ -166,6 +153,24 @@ def get_element_value(t_block: dict) -> str | None:
     return None
 
 
+def get_3day_time(t_block: dict) -> datetime.datetime | None:
+    """
+    三天預報有些 element 使用 DataTime，
+    有些 element 使用 StartTime / EndTime。
+
+    目前 weather.forecast_three_days 只有 data_time 欄位，
+    所以沒有 DataTime 時，用 StartTime 當 data_time。
+    """
+    dt_str = (
+        t_block.get("DataTime")
+        or t_block.get("dataTime")
+        or t_block.get("StartTime")
+        or t_block.get("startTime")
+    )
+
+    return parse_time(dt_str)
+
+
 def build_reference_maps(db_connector):
     geo_rows = db_connector.execute("""
         SELECT id, geocode
@@ -209,19 +214,6 @@ def fetch_and_normalize_records(
     code_to_id: dict,
     name_to_elem_id: dict,
 ) -> list[tuple[int, int, datetime.datetime, int, str]]:
-    """
-    回傳格式：
-    (
-        ticker_id,
-        location_info_id,
-        data_time,
-        element_type_id,
-        element_value,
-    )
-
-    這裡使用 record_map 去重。
-    同一批資料如果 key 重複，會保留最後一次解析到的值。
-    """
     record_map: dict[tuple[int, int, datetime.datetime, int], str] = {}
 
     total_parsed_count = 0
@@ -254,6 +246,10 @@ def fetch_and_normalize_records(
 
                 if not location_info_id:
                     ticker_skipped_count += 1
+                    log.warning(
+                        f"location_info 找不到: "
+                        f"ticker_code={ticker_code}, data_id={data_id}, geocode={geocode}"
+                    )
                     continue
 
                 for element in get_weather_elements(loc):
@@ -263,22 +259,28 @@ def fetch_and_normalize_records(
                         ticker_skipped_count += 1
                         continue
 
-                    if elem_name in SKIP_ELEMENT_NAMES:
-                        ticker_skipped_count += 1
-                        continue
-
                     element_type_id = name_to_elem_id.get(elem_name)
 
                     if not element_type_id:
                         ticker_skipped_count += 1
+                        log.warning(
+                            f"element_type 找不到: "
+                            f"ticker_code={ticker_code}, data_id={data_id}, "
+                            f"geocode={geocode}, elem_name={elem_name}"
+                        )
                         continue
 
                     for t_block in get_time_blocks(element):
-                        dt_str = t_block.get("DataTime") or t_block.get("dataTime")
-                        parsed_dt = parse_time(dt_str)
+                        parsed_dt = get_3day_time(t_block)
 
                         if not parsed_dt:
                             ticker_skipped_count += 1
+                            log.warning(
+                                f"3天預報時間解析失敗: "
+                                f"ticker_code={ticker_code}, data_id={data_id}, "
+                                f"geocode={geocode}, elem_name={elem_name}, "
+                                f"raw_time_block={t_block}"
+                            )
                             continue
 
                         actual_value = get_element_value(t_block)
