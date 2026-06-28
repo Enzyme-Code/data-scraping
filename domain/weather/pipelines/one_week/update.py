@@ -54,11 +54,11 @@ UPSERT_FORECAST_ONE_WEEK_SQL = """
         location_info_id,
         start_time,
         end_time,
-        element_type_id,
+        element_name,
         element_value
     )
     VALUES (%s, %s, %s, %s, %s, %s)
-    ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_type_id)
+    ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_name)
     DO UPDATE SET
         element_value = EXCLUDED.element_value,
         updated_at = NOW();
@@ -177,27 +177,35 @@ def build_reference_maps(db_connector):
         if row_get(row, "ticker_code", 1)
     }
 
-    elem_rows = db_connector.execute("""
-        SELECT id, element_name
-        FROM weather.element_type;
-    """)
-
-    name_to_elem_id = {
-        row_get(row, "element_name", 1): row_get(row, "id", 0)
-        for row in elem_rows
-        if row_get(row, "element_name", 1)
-    }
-
-    return geocode_to_id, code_to_id, name_to_elem_id
+    return geocode_to_id, code_to_id
 
 
 def fetch_and_normalize_records(
     client: WeatherClient,
     geocode_to_id: dict,
     code_to_id: dict,
-    name_to_elem_id: dict,
-) -> list[tuple[int, int, datetime.datetime, datetime.datetime, int, str]]:
-    record_map: dict[tuple[int, int, datetime.datetime, datetime.datetime, int], str] = {}
+) -> list[tuple[int, int, datetime.datetime, datetime.datetime, str, str]]:
+    """
+    回傳格式：
+    (
+        ticker_id,
+        location_info_id,
+        start_time,
+        end_time,
+        element_name,
+        element_value,
+    )
+
+    去重 key：
+    (
+        ticker_id,
+        location_info_id,
+        start_time,
+        end_time,
+        element_name,
+    )
+    """
+    record_map: dict[tuple[int, int, datetime.datetime, datetime.datetime, str], str] = {}
 
     total_parsed_count = 0
     total_skipped_count = 0
@@ -240,16 +248,9 @@ def fetch_and_normalize_records(
 
                     if not elem_name:
                         ticker_skipped_count += 1
-                        continue
-
-                    element_type_id = name_to_elem_id.get(elem_name)
-
-                    if not element_type_id:
-                        ticker_skipped_count += 1
                         log.warning(
-                            f"element_type 找不到: "
-                            f"ticker_code={ticker_code}, data_id={data_id}, "
-                            f"geocode={geocode}, elem_name={elem_name}"
+                            f"WeatherElement 無 ElementName: "
+                            f"ticker_code={ticker_code}, data_id={data_id}, geocode={geocode}"
                         )
                         continue
 
@@ -274,6 +275,12 @@ def fetch_and_normalize_records(
 
                         if actual_value is None:
                             ticker_skipped_count += 1
+                            log.warning(
+                                f"1週預報 ElementValue 為空: "
+                                f"ticker_code={ticker_code}, data_id={data_id}, "
+                                f"geocode={geocode}, elem_name={elem_name}, "
+                                f"start_time={parsed_st}, end_time={parsed_et}"
+                            )
                             continue
 
                         key = (
@@ -281,7 +288,7 @@ def fetch_and_normalize_records(
                             location_info_id,
                             parsed_st,
                             parsed_et,
-                            element_type_id,
+                            elem_name,
                         )
 
                         record_map[key] = actual_value
@@ -307,10 +314,10 @@ def fetch_and_normalize_records(
             location_info_id,
             start_time,
             end_time,
-            element_type_id,
+            element_name,
             element_value,
         )
-        for (ticker_id, location_info_id, start_time, end_time, element_type_id), element_value
+        for (ticker_id, location_info_id, start_time, end_time, element_name), element_value
         in record_map.items()
     ]
 
@@ -326,7 +333,7 @@ def fetch_and_normalize_records(
 
 def write_records(
     db_connector,
-    records: list[tuple[int, int, datetime.datetime, datetime.datetime, int, str]],
+    records: list[tuple[int, int, datetime.datetime, datetime.datetime, str, str]],
     batch_size: int = 50000,
 ) -> None:
     if not records:
@@ -366,20 +373,18 @@ def update():
     db_connector.connect()
 
     try:
-        geocode_to_id, code_to_id, name_to_elem_id = build_reference_maps(db_connector)
+        geocode_to_id, code_to_id = build_reference_maps(db_connector)
 
         log.info(
             f"reference map 載入完成: "
             f"locations={len(geocode_to_id)}, "
-            f"tickers={len(code_to_id)}, "
-            f"elements={len(name_to_elem_id)}"
+            f"tickers={len(code_to_id)}"
         )
 
         records = fetch_and_normalize_records(
             client=client,
             geocode_to_id=geocode_to_id,
             code_to_id=code_to_id,
-            name_to_elem_id=name_to_elem_id,
         )
 
         write_records(
