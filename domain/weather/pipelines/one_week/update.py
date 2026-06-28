@@ -1,142 +1,417 @@
 import datetime
 import os
+from typing import Any
+
 from dotenv import load_dotenv
 
 from storage import DatabaseFactory, PostgreConfig
 from domain.weather.providers.client import WeatherClient
 from utils.logger import set_log
 
+
 load_dotenv()
 log = set_log(project_name="weather/forecast_1week")
+
 
 cfg = PostgreConfig(
     host=os.getenv("PG_HOST"),
     port=int(os.getenv("PG_PORT", 5432)),
     user=os.getenv("PG_USER"),
     password=os.getenv("PG_PASSWORD"),
-    database=os.getenv("DATABASE")
+    database=os.getenv("DATABASE"),
 )
 
+
 TICKER_MAP_1WEEK = {
-    "sys.wea.cwa.il.1week": "F-D0047-003", "sys.wea.cwa.ty.1week": "F-D0047-007",
-    "sys.wea.cwa.hsh.1week": "F-D0047-011", "sys.wea.cwa.ml.1week": "F-D0047-015",
-    "sys.wea.cwa.ch.1week": "F-D0047-019", "sys.wea.cwa.nt.1week": "F-D0047-023",
-    "sys.wea.cwa.yl.1week": "F-D0047-027", "sys.wea.cwa.cyh.1week": "F-D0047-031",
-    "sys.wea.cwa.pt.1week": "F-D0047-035", "sys.wea.cwa.tt.1week": "F-D0047-039",
-    "sys.wea.cwa.hl.1week": "F-D0047-043", "sys.wea.cwa.ph.1week": "F-D0047-047",
-    "sys.wea.cwa.kl.1week": "F-D0047-051", "sys.wea.cwa.hsc.1week": "F-D0047-055",
-    "sys.wea.cwa.cyc.1week": "F-D0047-059", "sys.wea.cwa.tp.1week": "F-D0047-063",
-    "sys.wea.cwa.kh.1week": "F-D0047-067", "sys.wea.cwa.ntpc.1week": "F-D0047-071",
-    "sys.wea.cwa.tc.1week": "F-D0047-075", "sys.wea.cwa.tn.1week": "F-D0047-079",
-    "sys.wea.cwa.mz.1week": "F-D0047-083", "sys.wea.cwa.km.1week": "F-D0047-087"
+    "sys.wea.cwa.il.1week": "F-D0047-003",
+    "sys.wea.cwa.ty.1week": "F-D0047-007",
+    "sys.wea.cwa.hsh.1week": "F-D0047-011",
+    "sys.wea.cwa.ml.1week": "F-D0047-015",
+    "sys.wea.cwa.ch.1week": "F-D0047-019",
+    "sys.wea.cwa.nt.1week": "F-D0047-023",
+    "sys.wea.cwa.yl.1week": "F-D0047-027",
+    "sys.wea.cwa.cyh.1week": "F-D0047-031",
+    "sys.wea.cwa.pt.1week": "F-D0047-035",
+    "sys.wea.cwa.tt.1week": "F-D0047-039",
+    "sys.wea.cwa.hl.1week": "F-D0047-043",
+    "sys.wea.cwa.ph.1week": "F-D0047-047",
+    "sys.wea.cwa.kl.1week": "F-D0047-051",
+    "sys.wea.cwa.hsc.1week": "F-D0047-055",
+    "sys.wea.cwa.cyc.1week": "F-D0047-059",
+    "sys.wea.cwa.tp.1week": "F-D0047-063",
+    "sys.wea.cwa.kh.1week": "F-D0047-067",
+    "sys.wea.cwa.ntpc.1week": "F-D0047-071",
+    "sys.wea.cwa.tc.1week": "F-D0047-075",
+    "sys.wea.cwa.tn.1week": "F-D0047-079",
+    "sys.wea.cwa.mz.1week": "F-D0047-083",
+    "sys.wea.cwa.km.1week": "F-D0047-087",
 }
 
-def parse_time(t_str):
-    if not t_str: return None
-    return datetime.datetime.strptime(t_str.replace("T", " ").split("+")[0].strip(), "%Y-%m-%d %H:%M:%S")
+
+SKIP_ELEMENT_NAMES = {
+    "天氣預報綜合描述",
+    "ComfortIndexDescription",
+    "最大舒適度指數描述",
+    "最小舒適度指數描述",
+    "WeatherCode",
+    "天氣現象代碼",
+}
+
+
+UPSERT_FORECAST_ONE_WEEK_SQL = """
+    INSERT INTO weather.forecast_one_week (
+        ticker_id,
+        location_info_id,
+        start_time,
+        end_time,
+        element_type_id,
+        element_value
+    )
+    VALUES (%s, %s, %s, %s, %s, %s)
+    ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_type_id)
+    DO UPDATE SET
+        element_value = EXCLUDED.element_value,
+        updated_at = NOW();
+"""
+
+
+def parse_time(t_str: str | None) -> datetime.datetime | None:
+    if not t_str:
+        return None
+
+    try:
+        normalized = t_str.replace("T", " ").split("+")[0].strip()
+        return datetime.datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        log.warning(f"時間格式解析失敗: {t_str}")
+        return None
+
+
+def row_get(row: Any, key: str, index: int) -> Any:
+    if isinstance(row, dict):
+        return row.get(key)
+    return row[index]
+
+
+def get_records_node(raw_response: Any) -> dict:
+    if not raw_response:
+        return {}
+
+    if isinstance(raw_response, list):
+        first_item = raw_response[0] if raw_response else {}
+        if isinstance(first_item, dict):
+            return first_item.get("records", {}) or {}
+        return {}
+
+    if isinstance(raw_response, dict):
+        return raw_response.get("records", {}) or {}
+
+    return {}
+
+
+def get_locations(records_node: dict) -> list[dict]:
+    locations_list = records_node.get("Locations") or records_node.get("locations") or []
+
+    if not locations_list:
+        return []
+
+    first_group = locations_list[0] or {}
+
+    return (
+        first_group.get("Location")
+        or first_group.get("location")
+        or []
+    )
+
+
+def get_weather_elements(loc: dict) -> list[dict]:
+    return (
+        loc.get("WeatherElement")
+        or loc.get("weatherElement")
+        or []
+    )
+
+
+def get_time_blocks(element: dict) -> list[dict]:
+    return (
+        element.get("Time")
+        or element.get("time")
+        or []
+    )
+
+
+def get_element_value(t_block: dict) -> str | None:
+    values = (
+        t_block.get("ElementValue")
+        or t_block.get("elementValue")
+        or []
+    )
+
+    if not values:
+        return None
+
+    first_value = values[0]
+
+    if isinstance(first_value, dict):
+        for value in first_value.values():
+            if value is not None:
+                return str(value)
+        return None
+
+    if first_value is not None:
+        return str(first_value)
+
+    return None
+
+
+def build_reference_maps(db_connector):
+    geo_rows = db_connector.execute("""
+        SELECT id, geocode
+        FROM weather.location_info;
+    """)
+
+    geocode_to_id = {
+        row_get(row, "geocode", 1): row_get(row, "id", 0)
+        for row in geo_rows
+        if row_get(row, "geocode", 1)
+    }
+
+    ticker_rows = db_connector.execute("""
+        SELECT id, ticker_code
+        FROM ticker.ticker_info;
+    """)
+
+    code_to_id = {
+        row_get(row, "ticker_code", 1): row_get(row, "id", 0)
+        for row in ticker_rows
+        if row_get(row, "ticker_code", 1)
+    }
+
+    elem_rows = db_connector.execute("""
+        SELECT id, element_name
+        FROM weather.element_type;
+    """)
+
+    name_to_elem_id = {
+        row_get(row, "element_name", 1): row_get(row, "id", 0)
+        for row in elem_rows
+        if row_get(row, "element_name", 1)
+    }
+
+    return geocode_to_id, code_to_id, name_to_elem_id
+
+
+def fetch_and_normalize_records(
+    client: WeatherClient,
+    geocode_to_id: dict,
+    code_to_id: dict,
+    name_to_elem_id: dict,
+) -> list[tuple[int, int, datetime.datetime, datetime.datetime, int, str]]:
+    """
+    回傳格式：
+    (
+        ticker_id,
+        location_info_id,
+        start_time,
+        end_time,
+        element_type_id,
+        element_value,
+    )
+
+    使用 record_map 去重。
+    去重 key 對應 DB unique key：
+    (
+        ticker_id,
+        location_info_id,
+        start_time,
+        end_time,
+        element_type_id,
+    )
+    """
+    record_map: dict[tuple[int, int, datetime.datetime, datetime.datetime, int], str] = {}
+
+    total_parsed_count = 0
+    total_skipped_count = 0
+
+    for ticker_code, data_id in TICKER_MAP_1WEEK.items():
+        ticker_id = code_to_id.get(ticker_code)
+
+        if not ticker_id:
+            log.warning(f"ticker_info 找不到 ticker_code: {ticker_code}")
+            continue
+
+        try:
+            log.info(f"開始下載1週預報: ticker_code={ticker_code}, data_id={data_id}")
+
+            raw_response = client.get_rest_data(data_id=data_id)
+            records_node = get_records_node(raw_response)
+            locations = get_locations(records_node)
+
+            if not locations:
+                log.warning(f"CWA response 無 Location: ticker_code={ticker_code}, data_id={data_id}")
+                continue
+
+            ticker_parsed_count = 0
+            ticker_skipped_count = 0
+
+            for loc in locations:
+                geocode = loc.get("Geocode") or loc.get("geocode")
+                location_info_id = geocode_to_id.get(geocode)
+
+                if not location_info_id:
+                    ticker_skipped_count += 1
+                    continue
+
+                for element in get_weather_elements(loc):
+                    elem_name = element.get("ElementName") or element.get("elementName")
+
+                    if not elem_name:
+                        ticker_skipped_count += 1
+                        continue
+
+                    if elem_name in SKIP_ELEMENT_NAMES:
+                        ticker_skipped_count += 1
+                        continue
+
+                    element_type_id = name_to_elem_id.get(elem_name)
+
+                    if not element_type_id:
+                        ticker_skipped_count += 1
+                        continue
+
+                    for t_block in get_time_blocks(element):
+                        st_str = t_block.get("StartTime") or t_block.get("startTime")
+                        et_str = t_block.get("EndTime") or t_block.get("endTime")
+
+                        parsed_st = parse_time(st_str)
+                        parsed_et = parse_time(et_str)
+
+                        if not parsed_st or not parsed_et:
+                            ticker_skipped_count += 1
+                            continue
+
+                        actual_value = get_element_value(t_block)
+
+                        if actual_value is None:
+                            ticker_skipped_count += 1
+                            continue
+
+                        key = (
+                            ticker_id,
+                            location_info_id,
+                            parsed_st,
+                            parsed_et,
+                            element_type_id,
+                        )
+
+                        record_map[key] = actual_value
+                        ticker_parsed_count += 1
+
+            total_parsed_count += ticker_parsed_count
+            total_skipped_count += ticker_skipped_count
+
+            log.info(
+                f"完成解析1週預報: ticker_code={ticker_code}, "
+                f"parsed={ticker_parsed_count}, "
+                f"skipped={ticker_skipped_count}, "
+                f"目前去重後總筆數={len(record_map)}"
+            )
+
+        except Exception as api_err:
+            log.error(f"下載或解析 ticker_code={ticker_code}, data_id={data_id} 異常: {api_err}")
+            continue
+
+    records = [
+        (
+            ticker_id,
+            location_info_id,
+            start_time,
+            end_time,
+            element_type_id,
+            element_value,
+        )
+        for (ticker_id, location_info_id, start_time, end_time, element_type_id), element_value
+        in record_map.items()
+    ]
+
+    log.info(
+        f"1週預報資料整理完成: "
+        f"parsed={total_parsed_count}, "
+        f"skipped={total_skipped_count}, "
+        f"deduped={len(records)}"
+    )
+
+    return records
+
+
+def write_records(
+    db_connector,
+    records: list[tuple[int, int, datetime.datetime, datetime.datetime, int, str]],
+    batch_size: int = 50000,
+) -> None:
+    if not records:
+        log.info("沒有可寫入的1週鄉鎮走勢預報資料")
+        return
+
+    total_records = len(records)
+
+    log.info(f"開始寫入1週預報資料: total_records={total_records}")
+
+    for i in range(0, total_records, batch_size):
+        chunk = records[i:i + batch_size]
+        end_idx = min(i + batch_size, total_records)
+
+        log.info(
+            f"正在寫入1週預報資料: "
+            f"{end_idx}/{total_records} "
+            f"({(end_idx / total_records) * 100:.1f}%)"
+        )
+
+        if hasattr(db_connector, "executemany"):
+            db_connector.executemany(UPSERT_FORECAST_ONE_WEEK_SQL, chunk)
+        else:
+            log.warning("db_connector 沒有 executemany，將使用逐筆 execute，速度會比較慢")
+            for row in chunk:
+                db_connector.execute(UPSERT_FORECAST_ONE_WEEK_SQL, row)
+
+    log.info(f"成功強制同步 {total_records} 筆1週鄉鎮走勢預報資料")
+
 
 def update():
     log.info("開始執行1週鄉鎮走勢預報同步排程")
+
     client = WeatherClient(api_key=os.getenv("WEATHER_API_KEY"))
 
     db_connector = DatabaseFactory.get_connector(cfg)
     db_connector.connect()
 
     try:
-        geo_rows = db_connector.execute("SELECT id, geocode FROM weather.location_info;")
-        geocode_to_id = {
-            (row['geocode'] if isinstance(row, dict) else row[1]): 
-            (row['id'] if isinstance(row, dict) else row[0]) 
-            for row in geo_rows
-        }
+        geocode_to_id, code_to_id, name_to_elem_id = build_reference_maps(db_connector)
 
-        ticker_rows = db_connector.execute("SELECT id, ticker_code FROM ticker.ticker_info;")
-        code_to_id = {
-            (row['ticker_code'] if isinstance(row, dict) else row[1]): 
-            (row['id'] if isinstance(row, dict) else row[0]) 
-            for row in ticker_rows
-        }
+        log.info(
+            f"reference map 載入完成: "
+            f"locations={len(geocode_to_id)}, "
+            f"tickers={len(code_to_id)}, "
+            f"elements={len(name_to_elem_id)}"
+        )
 
-        elem_rows = db_connector.execute("SELECT id, element_name FROM weather.element_type;")
-        name_to_elem_id = {
-            (row['element_name'] if isinstance(row, dict) else row[1]): 
-            (row['id'] if isinstance(row, dict) else row[0]) 
-            for row in elem_rows
-        }
+        records = fetch_and_normalize_records(
+            client=client,
+            geocode_to_id=geocode_to_id,
+            code_to_id=code_to_id,
+            name_to_elem_id=name_to_elem_id,
+        )
 
-        valid_records = []
-
-        for ticker_code, data_id in TICKER_MAP_1WEEK.items():
-            ticker_id = code_to_id.get(ticker_code)
-            if not ticker_id: continue
-
-            try:
-                raw_response = client.get_rest_data(data_id=data_id)
-                records_node = raw_response[0].get('records', {})
-                locations_list = records_node.get('Locations') or records_node.get('locations', [])
-                if not locations_list or not locations_list[0]: continue
-
-                for loc in locations_list[0].get('Location', []):
-                    geocode = loc.get("Geocode") or loc.get("geocode")
-                    location_info_id = geocode_to_id.get(geocode)
-                    if not location_info_id: continue
-
-                    for element in loc.get('WeatherElement', []):
-                        elem_name = element.get("ElementName") or element.get("elementName")
-                        
-                        # 過濾不需要的綜合描述與代碼
-                        if elem_name in ("天氣預報綜合描述", "ComfortIndexDescription", "最大舒適度指數描述", "最小舒適度指數描述", "WeatherCode", "天氣現象代碼"):
-                            continue
-
-                        element_type_id = name_to_elem_id.get(elem_name)
-                        if not element_type_id: continue
-
-                        for t_block in element.get('Time', []):
-                            st_str = t_block.get("StartTime") or t_block.get("startTime")
-                            et_str = t_block.get("EndTime") or t_block.get("endTime")
-                            
-                            parsed_st = parse_time(st_str)
-                            parsed_et = parse_time(et_str)
-                            if not parsed_st or not parsed_et: continue
-
-                            values = t_block.get("ElementValue") or t_block.get("elementValue", [])
-                            if not values: continue
-                            
-                            val_dict = values[0]
-                            actual_value = next(iter(val_dict.values())) if isinstance(val_dict, dict) else str(val_dict)
-
-                            valid_records.append((
-                                ticker_id, location_info_id, parsed_st, parsed_et, element_type_id, str(actual_value)
-                            ))
-
-            except Exception as api_err:
-                log.error(f"下載或解析 Ticker: {ticker_code} 異常: {api_err}")
-                continue
-
-        if valid_records:
-            upsert_sql = """
-                INSERT INTO weather.forecast_one_week (
-                    ticker_id, location_info_id, start_time, end_time, element_type_id, element_value
-                ) VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (ticker_id, location_info_id, start_time, end_time, element_type_id) 
-                DO UPDATE SET 
-                    element_value = EXCLUDED.element_value,
-                    updated_at = NOW();
-            """
-            
-            batch_size = 1000
-            for i in range(0, len(valid_records), batch_size):
-                chunk = valid_records[i:i + batch_size]
-                if hasattr(db_connector, 'executemany'):
-                    db_connector.executemany(upsert_sql, chunk)
-                else:
-                    for row in chunk: 
-                        db_connector.execute(upsert_sql, row)
-                        
-            log.info(f"成功滾動同步 {len(valid_records)} 筆一週走勢垂直因子數據 (已完成 INT 效能優化分批打包)")
+        write_records(
+            db_connector=db_connector,
+            records=records,
+            batch_size=50000,
+        )
 
     finally:
         db_connector.close()
+        log.info("1週鄉鎮走勢預報同步排程結束")
+
 
 if __name__ == "__main__":
     update()
