@@ -1,11 +1,22 @@
 import datetime
 import os
-from typing import Any
 
 from dotenv import load_dotenv
 
-from storage import DatabaseFactory, PostgreConfig
+from storage import DatabaseFactory
 from domain.weather.providers.client import WeatherClient
+from domain.weather.pipelines.one_week.config import TICKER_MAP_1WEEK
+from domain.weather.pipelines.utils import (
+    build_postgre_config,
+    build_reference_maps,
+    get_element_value,
+    get_locations,
+    get_records_node,
+    get_time_blocks,
+    get_weather_elements,
+    parse_time,
+    write_many,
+)
 from utils.logger import set_log
 
 
@@ -13,39 +24,7 @@ load_dotenv()
 log = set_log(project_name="weather/forecast_1week")
 
 
-cfg = PostgreConfig(
-    host=os.getenv("PG_HOST"),
-    port=int(os.getenv("PG_PORT", 5432)),
-    user=os.getenv("PG_USER"),
-    password=os.getenv("PG_PASSWORD"),
-    database=os.getenv("DATABASE"),
-)
-
-
-TICKER_MAP_1WEEK = {
-    "sys.wea.cwa.il.1week": "F-D0047-003",
-    "sys.wea.cwa.ty.1week": "F-D0047-007",
-    "sys.wea.cwa.hsh.1week": "F-D0047-011",
-    "sys.wea.cwa.ml.1week": "F-D0047-015",
-    "sys.wea.cwa.ch.1week": "F-D0047-019",
-    "sys.wea.cwa.nt.1week": "F-D0047-023",
-    "sys.wea.cwa.yl.1week": "F-D0047-027",
-    "sys.wea.cwa.cyh.1week": "F-D0047-031",
-    "sys.wea.cwa.pt.1week": "F-D0047-035",
-    "sys.wea.cwa.tt.1week": "F-D0047-039",
-    "sys.wea.cwa.hl.1week": "F-D0047-043",
-    "sys.wea.cwa.ph.1week": "F-D0047-047",
-    "sys.wea.cwa.kl.1week": "F-D0047-051",
-    "sys.wea.cwa.hsc.1week": "F-D0047-055",
-    "sys.wea.cwa.cyc.1week": "F-D0047-059",
-    "sys.wea.cwa.tp.1week": "F-D0047-063",
-    "sys.wea.cwa.kh.1week": "F-D0047-067",
-    "sys.wea.cwa.ntpc.1week": "F-D0047-071",
-    "sys.wea.cwa.tc.1week": "F-D0047-075",
-    "sys.wea.cwa.tn.1week": "F-D0047-079",
-    "sys.wea.cwa.mz.1week": "F-D0047-083",
-    "sys.wea.cwa.km.1week": "F-D0047-087",
-}
+cfg = build_postgre_config()
 
 
 UPSERT_FORECAST_ONE_WEEK_SQL = """
@@ -63,121 +42,6 @@ UPSERT_FORECAST_ONE_WEEK_SQL = """
         element_value = EXCLUDED.element_value,
         updated_at = NOW();
 """
-
-
-def parse_time(t_str: str | None) -> datetime.datetime | None:
-    if not t_str:
-        return None
-
-    try:
-        normalized = t_str.replace("T", " ").split("+")[0].strip()
-        return datetime.datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        log.warning(f"時間格式解析失敗: {t_str}")
-        return None
-
-
-def row_get(row: Any, key: str, index: int) -> Any:
-    if isinstance(row, dict):
-        return row.get(key)
-    return row[index]
-
-
-def get_records_node(raw_response: Any) -> dict:
-    if not raw_response:
-        return {}
-
-    if isinstance(raw_response, list):
-        first_item = raw_response[0] if raw_response else {}
-        if isinstance(first_item, dict):
-            return first_item.get("records", {}) or {}
-        return {}
-
-    if isinstance(raw_response, dict):
-        return raw_response.get("records", {}) or {}
-
-    return {}
-
-
-def get_locations(records_node: dict) -> list[dict]:
-    locations_list = records_node.get("Locations") or records_node.get("locations") or []
-
-    if not locations_list:
-        return []
-
-    first_group = locations_list[0] or {}
-
-    return (
-        first_group.get("Location")
-        or first_group.get("location")
-        or []
-    )
-
-
-def get_weather_elements(loc: dict) -> list[dict]:
-    return (
-        loc.get("WeatherElement")
-        or loc.get("weatherElement")
-        or []
-    )
-
-
-def get_time_blocks(element: dict) -> list[dict]:
-    return (
-        element.get("Time")
-        or element.get("time")
-        or []
-    )
-
-
-def get_element_value(t_block: dict) -> str | None:
-    values = (
-        t_block.get("ElementValue")
-        or t_block.get("elementValue")
-        or []
-    )
-
-    if not values:
-        return None
-
-    first_value = values[0]
-
-    if isinstance(first_value, dict):
-        for value in first_value.values():
-            if value is not None:
-                return str(value)
-        return None
-
-    if first_value is not None:
-        return str(first_value)
-
-    return None
-
-
-def build_reference_maps(db_connector):
-    geo_rows = db_connector.execute("""
-        SELECT id, geocode
-        FROM weather.location_info;
-    """)
-
-    geocode_to_id = {
-        row_get(row, "geocode", 1): row_get(row, "id", 0)
-        for row in geo_rows
-        if row_get(row, "geocode", 1)
-    }
-
-    ticker_rows = db_connector.execute("""
-        SELECT id, ticker_code
-        FROM ticker.ticker_info;
-    """)
-
-    code_to_id = {
-        row_get(row, "ticker_code", 1): row_get(row, "id", 0)
-        for row in ticker_rows
-        if row_get(row, "ticker_code", 1)
-    }
-
-    return geocode_to_id, code_to_id
 
 
 def fetch_and_normalize_records(
@@ -258,8 +122,8 @@ def fetch_and_normalize_records(
                         st_str = t_block.get("StartTime") or t_block.get("startTime")
                         et_str = t_block.get("EndTime") or t_block.get("endTime")
 
-                        parsed_st = parse_time(st_str)
-                        parsed_et = parse_time(et_str)
+                        parsed_st = parse_time(st_str, log)
+                        parsed_et = parse_time(et_str, log)
 
                         if not parsed_st or not parsed_et:
                             ticker_skipped_count += 1
@@ -354,12 +218,13 @@ def write_records(
             f"({(end_idx / total_records) * 100:.1f}%)"
         )
 
-        if hasattr(db_connector, "executemany"):
-            db_connector.executemany(UPSERT_FORECAST_ONE_WEEK_SQL, chunk)
-        else:
-            log.warning("db_connector 沒有 executemany，將使用逐筆 execute，速度會比較慢")
-            for row in chunk:
-                db_connector.execute(UPSERT_FORECAST_ONE_WEEK_SQL, row)
+        write_many(
+            db_connector,
+            UPSERT_FORECAST_ONE_WEEK_SQL,
+            chunk,
+            log=log,
+            warn_message="db_connector 沒有 executemany，將使用逐筆 execute，速度會比較慢",
+        )
 
     log.info(f"成功強制同步 {total_records} 筆1週鄉鎮走勢預報資料")
 

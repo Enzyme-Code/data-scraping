@@ -1,11 +1,22 @@
 import datetime
 import os
-from typing import Any
 
 from dotenv import load_dotenv
 
-from storage import DatabaseFactory, PostgreConfig
+from storage import DatabaseFactory
 from domain.weather.providers.client import WeatherClient
+from domain.weather.pipelines.three_days.config import TICKER_MAP_3DAY
+from domain.weather.pipelines.utils import (
+    build_postgre_config,
+    build_reference_maps,
+    get_element_value,
+    get_locations,
+    get_records_node,
+    get_time_blocks,
+    get_weather_elements,
+    parse_time,
+    write_many,
+)
 from utils.logger import set_log
 
 
@@ -13,39 +24,7 @@ load_dotenv()
 log = set_log(project_name="weather/sync_3day")
 
 
-cfg = PostgreConfig(
-    host=os.getenv("PG_HOST"),
-    port=int(os.getenv("PG_PORT", 5432)),
-    user=os.getenv("PG_USER"),
-    password=os.getenv("PG_PASSWORD"),
-    database=os.getenv("DATABASE"),
-)
-
-
-TICKER_MAP_3DAY = {
-    "sys.wea.cwa.il.3day": "F-D0047-001",
-    "sys.wea.cwa.ty.3day": "F-D0047-005",
-    "sys.wea.cwa.hsh.3day": "F-D0047-009",
-    "sys.wea.cwa.ml.3day": "F-D0047-013",
-    "sys.wea.cwa.ch.3day": "F-D0047-017",
-    "sys.wea.cwa.nt.3day": "F-D0047-021",
-    "sys.wea.cwa.yl.3day": "F-D0047-025",
-    "sys.wea.cwa.cyh.3day": "F-D0047-029",
-    "sys.wea.cwa.pt.3day": "F-D0047-033",
-    "sys.wea.cwa.tt.3day": "F-D0047-037",
-    "sys.wea.cwa.hl.3day": "F-D0047-041",
-    "sys.wea.cwa.ph.3day": "F-D0047-045",
-    "sys.wea.cwa.kl.3day": "F-D0047-049",
-    "sys.wea.cwa.hsc.3day": "F-D0047-053",
-    "sys.wea.cwa.cyc.3day": "F-D0047-057",
-    "sys.wea.cwa.tp.3day": "F-D0047-061",
-    "sys.wea.cwa.kh.3day": "F-D0047-065",
-    "sys.wea.cwa.ntpc.3day": "F-D0047-069",
-    "sys.wea.cwa.tc.3day": "F-D0047-073",
-    "sys.wea.cwa.tn.3day": "F-D0047-077",
-    "sys.wea.cwa.mz.3day": "F-D0047-081",
-    "sys.wea.cwa.km.3day": "F-D0047-085",
-}
+cfg = build_postgre_config()
 
 
 UPSERT_FORECAST_THREE_DAYS_SQL = """
@@ -64,95 +43,6 @@ UPSERT_FORECAST_THREE_DAYS_SQL = """
 """
 
 
-def parse_time(t_str: str | None) -> datetime.datetime | None:
-    if not t_str:
-        return None
-
-    try:
-        normalized = t_str.replace("T", " ").split("+")[0].strip()
-        return datetime.datetime.strptime(normalized, "%Y-%m-%d %H:%M:%S")
-    except Exception:
-        log.warning(f"時間格式解析失敗: {t_str}")
-        return None
-
-
-def row_get(row: Any, key: str, index: int) -> Any:
-    if isinstance(row, dict):
-        return row.get(key)
-    return row[index]
-
-
-def get_records_node(raw_response: Any) -> dict:
-    if not raw_response:
-        return {}
-
-    if isinstance(raw_response, list):
-        first_item = raw_response[0] if raw_response else {}
-        if isinstance(first_item, dict):
-            return first_item.get("records", {}) or {}
-        return {}
-
-    if isinstance(raw_response, dict):
-        return raw_response.get("records", {}) or {}
-
-    return {}
-
-
-def get_locations(records_node: dict) -> list[dict]:
-    locations_list = records_node.get("Locations") or records_node.get("locations") or []
-
-    if not locations_list:
-        return []
-
-    first_group = locations_list[0] or {}
-
-    return (
-        first_group.get("Location")
-        or first_group.get("location")
-        or []
-    )
-
-
-def get_weather_elements(loc: dict) -> list[dict]:
-    return (
-        loc.get("WeatherElement")
-        or loc.get("weatherElement")
-        or []
-    )
-
-
-def get_time_blocks(element: dict) -> list[dict]:
-    return (
-        element.get("Time")
-        or element.get("time")
-        or []
-    )
-
-
-def get_element_value(t_block: dict) -> str | None:
-    values = (
-        t_block.get("ElementValue")
-        or t_block.get("elementValue")
-        or []
-    )
-
-    if not values:
-        return None
-
-    first_value = values[0]
-
-    if isinstance(first_value, dict):
-        for value in first_value.values():
-            if value is not None:
-                return str(value)
-        return None
-
-    if first_value is not None:
-        return str(first_value)
-
-    return None
-
-
 def get_3day_time(t_block: dict) -> datetime.datetime | None:
     """
     三天預報有些 element 使用 DataTime，
@@ -168,33 +58,7 @@ def get_3day_time(t_block: dict) -> datetime.datetime | None:
         or t_block.get("startTime")
     )
 
-    return parse_time(dt_str)
-
-
-def build_reference_maps(db_connector):
-    geo_rows = db_connector.execute("""
-        SELECT id, geocode
-        FROM weather.location_info;
-    """)
-
-    geocode_to_id = {
-        row_get(row, "geocode", 1): row_get(row, "id", 0)
-        for row in geo_rows
-        if row_get(row, "geocode", 1)
-    }
-
-    ticker_rows = db_connector.execute("""
-        SELECT id, ticker_code
-        FROM ticker.ticker_info;
-    """)
-
-    code_to_id = {
-        row_get(row, "ticker_code", 1): row_get(row, "id", 0)
-        for row in ticker_rows
-        if row_get(row, "ticker_code", 1)
-    }
-
-    return geocode_to_id, code_to_id
+    return parse_time(dt_str, log)
 
 
 def fetch_and_normalize_records(
@@ -363,12 +227,13 @@ def write_records(
             f"({(end_idx / total_records) * 100:.1f}%)"
         )
 
-        if hasattr(db_connector, "executemany"):
-            db_connector.executemany(UPSERT_FORECAST_THREE_DAYS_SQL, chunk)
-        else:
-            log.warning("db_connector 沒有 executemany，將使用逐筆 execute，速度會比較慢")
-            for row in chunk:
-                db_connector.execute(UPSERT_FORECAST_THREE_DAYS_SQL, row)
+        write_many(
+            db_connector,
+            UPSERT_FORECAST_THREE_DAYS_SQL,
+            chunk,
+            log=log,
+            warn_message="db_connector 沒有 executemany，將使用逐筆 execute，速度會比較慢",
+        )
 
     log.info(f"成功強制同步 {total_records} 筆3天鄉鎮逐時預報資料")
 
