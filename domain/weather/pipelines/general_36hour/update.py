@@ -2,34 +2,16 @@ import datetime
 import os
 from dotenv import load_dotenv
 
-from storage import DatabaseFactory, PostgreConfig
+from storage import DatabaseFactory
 from domain.weather.providers.client import WeatherClient
+from domain.weather.pipelines.general_36hour.config import CITY_TO_TICKER
+from domain.weather.pipelines.utils import build_postgre_config, write_many
 from utils.logger import set_log
 
 load_dotenv()
 log = set_log(project_name="weather/forecast_36h")
 
-cfg = PostgreConfig(
-    host=os.getenv("PG_HOST"),
-    port=int(os.getenv("PG_PORT", 5432)),
-    user=os.getenv("PG_USER"),
-    password=os.getenv("PG_PASSWORD"),
-    database=os.getenv("DATABASE")
-)
-
-CITY_TO_TICKER = {
-    "嘉義縣": "sys.wea.cwa.cyh.36h", "新北市": "sys.wea.cwa.ntpc.36h",
-    "嘉義市": "sys.wea.cwa.cyc.36h", "新竹縣": "sys.wea.cwa.hsh.36h",
-    "新竹市": "sys.wea.cwa.hsc.36h", "臺北市": "sys.wea.cwa.tp.36h",
-    "臺南市": "sys.wea.cwa.tn.36h", "宜蘭縣": "sys.wea.cwa.il.36h",
-    "苗栗縣": "sys.wea.cwa.ml.36h", "雲林縣": "sys.wea.cwa.yl.36h",
-    "花蓮縣": "sys.wea.cwa.hl.36h", "臺中市": "sys.wea.cwa.tc.36h",
-    "臺東縣": "sys.wea.cwa.tt.36h", "桃園市": "sys.wea.cwa.ty.36h",
-    "南投縣": "sys.wea.cwa.nt.36h", "高雄市": "sys.wea.cwa.kh.36h",
-    "金門縣": "sys.wea.cwa.km.36h", "屏東縣": "sys.wea.cwa.pt.36h",
-    "基隆市": "sys.wea.cwa.kl.36h", "澎湖縣": "sys.wea.cwa.ph.36h",
-    "彰化縣": "sys.wea.cwa.ch.36h", "連江縣": "sys.wea.cwa.mz.36h"
-}
+cfg = build_postgre_config()
 
 def safe_int(val):
     try: return int(val)
@@ -119,11 +101,7 @@ def update():
                     weather_description = EXCLUDED.weather_description,
                     updated_at = NOW();
             """
-            if hasattr(db_connector, 'executemany'):
-                db_connector.executemany(upsert_sql, valid_records)
-            else:
-                for row in valid_records: 
-                    db_connector.execute(upsert_sql, row)
+            write_many(db_connector, upsert_sql, valid_records)
             log.info(f"成功同步 {len(valid_records)} 筆36小時縣市預報資料")
 
     finally:
