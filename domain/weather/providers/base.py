@@ -20,14 +20,6 @@ class WeatherBase(Handler):
         self.rest_base_url = "https://opendata.cwa.gov.tw/api/v1/rest/datastore"
         self.file_base_url = "https://opendata.cwa.gov.tw/fileapi/v1/opendataapi"
 
-    def _fetch(self) -> List[Dict[str, Any]]:
-        """
-        Default implementation serving as a data structure blueprint.
-        Acts as an empty shell since this class utilizes specific multi-worker methods.
-        """
-        return []
-
-
     def _fetch_rest(self, data_id: str, location_name: str = None) -> List[Dict[str, Any]]:
         """
         Private worker method executing the actual REST request.

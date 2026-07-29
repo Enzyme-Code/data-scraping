@@ -1,20 +1,25 @@
 import time
-from abc import ABC, abstractmethod
-from typing import List, Dict, Any
+from abc import ABC
 
 class Base(ABC):
     def __init__(
-        self, 
-        max_retries: int = 3, 
-        retry_delay: int = 2, 
+        self,
+        debug: bool = False,
+        max_retries: int = 3,
+        retry_delay: int = 2,
         backoff_factor: float = 2.0
     ):
         """
         Initialize retry configurations.
         """
+        self.debug = debug
         self.max_retries = max_retries
         self.retry_delay = retry_delay
         self.backoff_factor = backoff_factor
+
+    def _debug(self, msg):
+        if self.debug:
+            print(f"[DEBUG] {msg}")
 
     def _retry(self, func, *args, **kwargs):
         """
@@ -22,22 +27,16 @@ class Base(ABC):
         """
         retries = 0
         delay = self.retry_delay
-        
-        while retries <= self.max_retries: 
+
+        while retries <= self.max_retries:
             try:
                 return func(*args, **kwargs)
             except Exception as e:
                 retries += 1
                 if retries > self.max_retries:
                     raise e
-                
-                print(f"DEBUG: Attempt {retries} failed. Retrying in {delay}s... Error: {e}")
+
+                self._debug(f"Attempt {retries} failed. Retrying in {delay}s... Error: {e}")
                 time.sleep(delay)
                 delay *= self.backoff_factor
         return None
-
-    def _fetch(self) -> List[Dict[str, Any]]:
-        """
-        Fetch data as a list of dictionaries for JSONB compatibility.
-        """
-        pass
