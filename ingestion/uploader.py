@@ -2,6 +2,7 @@ import os
 import pandas as pd
 import json
 from .base import Base
+from utils.translate import to_simplified
 
 class Uploader(Base):
     def file_upload(self, excel_filename: str):
@@ -23,17 +24,18 @@ class Uploader(Base):
 
             # 保留 JSONB 格式給未來前端或擴充彈性使用
             display_names = json.dumps({
-                "zh_tw": zh_name_val,
+                "zh-tw": zh_name_val,
+                "zh-cn": to_simplified(zh_name_val),
                 "en": en_name_val
             }, ensure_ascii=False)
 
             upsert_query = """
             INSERT INTO ticker.ticker_info (
-                ticker_code, zh_name, en_name, display_names, 
-                owner, source, category, region, frequency, url, note, is_active
-            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) 
-            ON CONFLICT (ticker_code) 
-            DO UPDATE SET 
+                ticker_code, zh_name, en_name, display_names,
+                owner, source, category, region, frequency, url, note, is_active, country
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ticker_code)
+            DO UPDATE SET
                 zh_name = EXCLUDED.zh_name,
                 en_name = EXCLUDED.en_name,
                 display_names = EXCLUDED.display_names,
@@ -45,12 +47,14 @@ class Uploader(Base):
                 url = EXCLUDED.url,
                 note = EXCLUDED.note,
                 is_active = EXCLUDED.is_active,
+                country = EXCLUDED.country,
                 updated_at = NOW();
             """
             params = (
                 ticker_val, zh_name_val, en_name_val, display_names,
-                row['owner'], row['source'], category_val, row['region'], 
-                str(row['frequency']), row['url'], row.get('note', ''), True
+                row['owner'], row['source'], category_val, row['region'],
+                str(row['frequency']), row['url'], row.get('note', ''), True,
+                row.get('country', '')
             )
 
             try:
@@ -61,7 +65,7 @@ class Uploader(Base):
 
 if __name__ == "__main__":
     with Uploader() as uploader:
-        uploader.file_upload("3day_1week_weather.xlsx")
+        uploader.file_upload("day_week_weather.xlsx")
 
 
         
