@@ -108,7 +108,7 @@ def get_element_value(t_block: dict) -> str | None:
 def build_reference_maps(db_connector):
     geo_rows = db_connector.execute("""
         SELECT id, geocode
-        FROM weather.location_info;
+        FROM info.weather_location_info;
     """)
 
     geocode_to_id = {
