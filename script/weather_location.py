@@ -77,7 +77,7 @@ def run_init():
         log.info(f"成功收集到共 {len(location_master_set)} 筆全台鄉鎮地理座標主檔，準備批次寫入...")
         
         upsert_sql = """
-            INSERT INTO weather.location_info (geocode, county_name, township_name, longitude, latitude)
+            INSERT INTO info.weather_location_info (geocode, county_name, township_name, longitude, latitude)
             VALUES (%s, %s, %s, %s, %s)
             ON CONFLICT (geocode) DO UPDATE SET
                 county_name = EXCLUDED.county_name,
