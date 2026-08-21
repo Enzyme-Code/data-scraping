@@ -25,7 +25,7 @@ def purge_expired_data():
         return
 
     try:
-        purge_general_air_pollution = "DELETE FROM air.general_air_pollution WHERE publishtime < date_trunc('hour', NOW() AT TIME ZONE 'Asia/Taipei');"
+        purge_general_air_pollution = "DELETE FROM air.general_air_pollution WHERE publishtime < date_trunc('hour', NOW() AT TIME ZONE 'Asia/Taipei') - INTERVAL '1 hour';"
         db_connector.execute(purge_general_air_pollution)
         log.info("general_air_pollution 過期即時測站資料切除完畢")
 
