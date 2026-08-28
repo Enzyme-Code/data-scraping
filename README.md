@@ -1,8 +1,7 @@
 # Data Scraping
 
-[English](#english) | [繁體中文](#繁體中文)
-
-## English
+<details open>
+<summary><b>English</b></summary>
 
 A modular data ingestion hub designed to collect and process various open data sources, including weather and air quality data.
 
@@ -39,7 +38,10 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-## 繁體中文
+</details>
+
+<details>
+<summary><b>繁體中文</b></summary>
 
 一個模組化的資料擷取中心，用於收集並處理各種公開資料來源，包含天氣與空氣品質資料。
 
@@ -75,3 +77,5 @@ python -m venv .venv
 ```bash
 source .venv/bin/activate
 ```
+
+</details>
